@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts  
+dist/
+build/
+*.spec.bak
+
+# Binary files (>100MB)
+*.exe
+ffmpeg_bundle/
+ffmpeg*.zip
+whisper_model_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
