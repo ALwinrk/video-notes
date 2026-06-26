@@ -1,37 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
-from PyInstaller.building.datastruct import Tree
+import os as _os
 
 datas = []
 binaries = []
-hiddenimports = [
-    'yt_dlp', 'openai', 'anthropic', 'PIL',
-    'pipeline', 'gui', 'ffmpeg_locator', 'transcriber',
-    'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
-    'queue', 'threading', 'logging',
-    'faster_whisper', 'ctranslate2', 'huggingface_hub',
-    'tokenizers', 'onnxruntime', 'av',
-]
+hiddenimports = ['yt_dlp', 'openai', 'anthropic', 'PIL', 'youtube_transcript_api']
 tmp_ret = collect_all('yt_dlp')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-ft_ret = collect_all('faster_whisper')
-datas += ft_ret[0]; binaries += ft_ret[1]; hiddenimports += ft_ret[2]
+# Bundle ffmpeg + ffprobe (required for frame extraction + audio processing)
+_ffmpeg_dir = 'ffmpeg_bundle/ffmpeg-8.1.1-essentials_build/bin'
+if _os.path.isdir(_ffmpeg_dir):
+    for _f in _os.listdir(_ffmpeg_dir):
+        _src = _os.path.join(_ffmpeg_dir, _f)
+        if _os.path.isfile(_src):
+            binaries.append((_src, '.'))
 
-ct_ret = collect_all('ctranslate2')
-datas += ct_ret[0]; binaries += ct_ret[1]; hiddenimports += ct_ret[2]
+# Bundle whisper.cpp binary + model (if available)
+_wcpp_exe = 'whisper.cpp.exe'
+if _os.path.isfile(_wcpp_exe):
+    binaries.append((_wcpp_exe, '.'))
 
-hf_ret = collect_all('huggingface_hub')
-datas += hf_ret[0]; binaries += hf_ret[1]; hiddenimports += hf_ret[2]
+_wcpp_model = 'ggml-tiny.bin'
+if _os.path.isfile(_wcpp_model):
+    datas.append((_wcpp_model, '.'))
 
-# Bundle ffmpeg + ffprobe
-_FFMPEG_DIR = r'C:\dpreasonix\ffmpeg_bundle\ffmpeg-8.1.1-essentials_build\bin'
-binaries += [
-    (_FFMPEG_DIR + '\\ffmpeg.exe', '.'),
-    (_FFMPEG_DIR + '\\ffprobe.exe', '.'),
-]
-
-# Whisper small model tree (added after Analysis below)
 
 a = Analysis(
     ['youtube_notes\\main.py'],
@@ -46,15 +39,6 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-
-# Bundle pre-downloaded Whisper small model (~464 MB)
-_whisper_tree = Tree(
-    r'C:\dpreasonix\whisper_model_cache',
-    prefix='whisper_model_cache',
-    excludes=['.git', '__pycache__'],
-)
-a.datas += _whisper_tree
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -63,13 +47,13 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='video-notes',
+    name='youtube-notes',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir='%LOCALAPPDATA%\\video-notes-v2',
+    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

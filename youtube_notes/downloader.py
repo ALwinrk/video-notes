@@ -31,13 +31,23 @@ def sanitise_filename(name: str) -> str:
 # Video metadata
 # ---------------------------------------------------------------------------
 
-def get_video_info(url: str) -> dict:
+def get_video_info(
+    url: str,
+    *,
+    cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
+) -> dict:
     """Return a dict with title, description, duration, channel, etc.
 
     Raises RuntimeError if the video is unavailable, private, or the
     network is unreachable.
     """
-    opts = {"quiet": True, "no_warnings": True, "extract_flat": False}
+    opts: dict = {"quiet": True, "no_warnings": True, "extract_flat": False}
+
+    if cookies_file and os.path.isfile(cookies_file):
+        opts["cookiefile"] = cookies_file
+    elif cookies_from_browser:
+        opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -97,71 +107,6 @@ def _find_new_file(
         if f.suffix.lower() in suffixes and str(f.resolve()) not in before:
             return str(f)
     return None
-
-
-# ---------------------------------------------------------------------------
-# Subtitle / transcript download
-# ---------------------------------------------------------------------------
-
-def download_subtitles(
-    url: str,
-    output_dir: str,
-    languages: list[str],
-) -> Optional[str]:
-    """Download subtitles and return path to the best subtitle file (or None).
-
-    Tries the languages in order; manual (uploaded) subs are preferred over
-    auto-generated ones.
-    """
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # First pass: try manual subtitles
-    for lang in languages:
-        path = _try_download_subs(url, str(out_dir), lang, auto=False)
-        if path:
-            return path
-
-    # Second pass: fall back to auto-generated
-    for lang in languages:
-        path = _try_download_subs(url, str(out_dir), lang, auto=True)
-        if path:
-            return path
-
-    logger.warning("No subtitles found for any requested language")
-    return None
-
-
-def _try_download_subs(
-    url: str, output_dir: str, lang: str, *, auto: bool
-) -> Optional[str]:
-    """Attempt to download one subtitle variant.  Return path or None."""
-    out = Path(output_dir)
-    tmpl = os.path.join(output_dir, "%(id)s.%(ext)s")
-    opts: dict = {
-        "quiet": True,
-        "no_warnings": True,
-        "writesubtitles": not auto,
-        "writeautomaticsub": auto,
-        "subtitleslangs": [lang],
-        "subtitlesformat": "vtt",       # WebVTT – easy to parse
-        "outtmpl": tmpl,
-        "skip_download": True,
-    }
-
-    # Snapshot existing subtitle files BEFORE download
-    before = _snapshot_files(out, (".vtt", ".srt"))
-
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as exc:
-        logger.debug("Subtitle download failed (%s, auto=%s): %s", lang, auto, exc)
-        return None
-
-    # Only return a NEWLY created file — never reuse stale files from
-    # previous runs (they belong to a different video).
-    return _find_new_file(out, (".vtt", ".srt"), before)
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +215,8 @@ def download_video(
     *,
     max_height: int = 1080,
     cancel_event: threading.Event | None = None,
+    cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
 ) -> str:
     """Download the video (capped at *max_height* for efficiency) and return path.
 
@@ -296,12 +243,16 @@ def download_video(
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]",
+        "format": f"bv*[height<={max_height}]+ba/b[height<={max_height}]/best",
         "outtmpl": tmpl,
         "merge_output_format": "mp4",
         "progress_hooks": [_progress_hook],
         "ffmpeg_location": _ffmpeg_dir,
     }
+    if cookies_file and os.path.isfile(cookies_file):
+        opts["cookiefile"] = cookies_file
+    elif cookies_from_browser:
+        opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:

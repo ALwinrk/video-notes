@@ -1,7 +1,13 @@
 """Configuration for YouTube Notes generator."""
 
+from __future__ import annotations
+
+import json
+import os
+import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 
@@ -23,6 +29,21 @@ class Provider(Enum):
     def supports_vision(self) -> bool:
         """Whether this provider's models can analyse images."""
         return self is not Provider.DEEPSEEK
+
+
+class TranscriberProvider(Enum):
+    """Speech-to-text transcription backend."""
+    GROQ = "groq"            # Groq Whisper API — free tier, fastest
+    OPENAI_WHISPER = "openai_whisper"  # OpenAI Whisper API — $0.006/min
+    LOCAL_WHISPER = "local"  # whisper.cpp tiny — offline, free
+
+
+class VideoType(Enum):
+    """Classification of a video by subtitle + audio availability."""
+    FULL = "full"                # subtitles + audio
+    SUBTITLED = "subtitled"      # subtitles only, no audio track
+    AUDIO_ONLY = "audio_only"    # no subtitles, has audio
+    VISUAL_ONLY = "visual_only"  # no subtitles, no audio — frames only
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +110,104 @@ def get_provider_info(provider: Provider) -> ProviderInfo:
 
 
 # ---------------------------------------------------------------------------
+# Transcriber provider metadata
+# ---------------------------------------------------------------------------
+
+TRANSCRIBER_CONFIG: dict[TranscriberProvider, dict] = {
+    TranscriberProvider.GROQ: {
+        "display_name": "Groq Whisper",
+        "key_env": "GROQ_API_KEY",
+        "model": "whisper-large-v3-turbo",
+        "api_base": "https://api.groq.com/openai/v1",
+        "free_minutes_per_month": 1000,
+        "cost_per_minute": 0.0,  # free tier
+    },
+    TranscriberProvider.OPENAI_WHISPER: {
+        "display_name": "OpenAI Whisper",
+        "key_env": "OPENAI_API_KEY",
+        "model": "whisper-1",
+        "api_base": "https://api.openai.com/v1",
+        "free_minutes_per_month": 0,
+        "cost_per_minute": 0.006,
+    },
+    TranscriberProvider.LOCAL_WHISPER: {
+        "display_name": "whisper.cpp 本地",
+        "key_env": None,
+        "model": "tiny",
+        "api_base": None,
+        "free_minutes_per_month": 999999,  # unlimited
+        "cost_per_minute": 0.0,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Usage tracker — persists monthly transcription minutes to disk
+# ---------------------------------------------------------------------------
+
+class UsageTracker:
+    """Track monthly transcription usage for each provider.
+
+    Persists to ``<output_dir>/_usage.json`` so it survives restarts.
+    """
+
+    def __init__(self, storage_dir: str = ".") -> None:
+        self._path = Path(storage_dir) / "_usage.json"
+        self._data: dict[str, dict] = self._load()
+
+    def _load(self) -> dict[str, dict]:
+        if not self._path.exists():
+            return {}
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+
+    def _current_month_key(self) -> str:
+        return time.strftime("%Y-%m")
+
+    def record(self, provider: TranscriberProvider, audio_duration_sec: float) -> None:
+        """Record *audio_duration_sec* seconds of transcription used."""
+        key = self._current_month_key()
+        pkey = provider.value
+        if key not in self._data:
+            self._data[key] = {}
+        if pkey not in self._data[key]:
+            self._data[key][pkey] = 0.0
+        self._data[key][pkey] += audio_duration_sec / 60.0
+        self._save()
+
+    def minutes_this_month(self, provider: TranscriberProvider) -> float:
+        """Return total minutes used for *provider* this month."""
+        key = self._current_month_key()
+        return self._data.get(key, {}).get(provider.value, 0.0)
+
+    def is_exhausted(self, provider: TranscriberProvider) -> bool:
+        """Check if *provider* has exceeded its free monthly limit."""
+        cfg = TRANSCRIBER_CONFIG.get(provider, {})
+        limit = cfg.get("free_minutes_per_month", 0)
+        if limit == 0:
+            return False
+        return self.minutes_this_month(provider) >= limit
+
+    def exhaustion_message(self, provider: TranscriberProvider) -> str | None:
+        """Return a warning message if provider is exhausted, else None."""
+        if not self.is_exhausted(provider):
+            return None
+        cfg = TRANSCRIBER_CONFIG.get(provider, {})
+        name = cfg.get("display_name", provider.value)
+        minutes = int(self.minutes_this_month(provider))
+        return (
+            f"{name} 免费额度已用尽（本月已用 {minutes} 分钟）。\n"
+            "建议切换到 OpenAI Whisper ($0.006/分钟) 或使用本地 whisper.cpp。"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pipeline configuration
 # ---------------------------------------------------------------------------
 
@@ -121,12 +240,31 @@ class Config:
     # Output language for generated notes
     note_language: str = "zh"
 
+    # YouTube auth (for login-required / age-restricted videos)
+    cookies_from_browser: Optional[str] = None  # chrome, firefox, edge, brave, opera
+    cookies_file: Optional[str] = None          # path to cookies.txt (Netscape format)
+
+    # Transcription settings
+    transcriber_chain: list[TranscriberProvider] = field(
+        default_factory=lambda: [
+            TranscriberProvider.GROQ,
+            TranscriberProvider.OPENAI_WHISPER,
+            TranscriberProvider.LOCAL_WHISPER,
+        ]
+    )
+
+    # Game analysis mode — enables game-specific prompt with categories
+    game_analysis: bool = True
+
     # Cleanup
     keep_video: bool = False
     keep_frames: bool = False
 
     # Transcript cap (characters) — longer transcripts are summarised first
     max_transcript_chars: int = 30_000
+
+    # Detected video type (set by pipeline after probing)
+    video_type: VideoType = VideoType.FULL
 
     def __post_init__(self) -> None:
         """Validate and normalise configuration."""

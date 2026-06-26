@@ -1,14 +1,50 @@
-"""Frame extraction via ffmpeg."""
+"""Frame extraction and video metadata via ffmpeg."""
 
 from __future__ import annotations
 
 import subprocess
+import json
 import logging
 from pathlib import Path
 
 from ffmpeg_locator import get_ffmpeg, get_ffprobe
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Audio track detection
+# ---------------------------------------------------------------------------
+
+def probe_audio_track(video_path: str) -> bool:
+    """Check whether *video_path* contains an audio stream.
+
+    Returns True if at least one audio stream is found.
+    Used by the pipeline to determine video type (full / audio_only / visual_only).
+    """
+    ffprobe = get_ffprobe()
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=codec_type",
+        "-of", "json",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            logger.debug("ffprobe audio probe failed: %s", result.stderr)
+            return False
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        has_audio = len(streams) > 0
+        logger.debug("Audio track detected: %s", has_audio)
+        return has_audio
+    except Exception as exc:
+        logger.debug("Audio probe exception: %s", exc)
+        # If we can't probe, assume audio exists (fail open)
+        return True
 
 
 def extract_frames(

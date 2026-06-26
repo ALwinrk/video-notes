@@ -22,3 +22,14 @@ whisper_model_cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Other projects mixed in this directory
+game_version_checker.py
+check_updates_proto.py
+HaiWai.xlsx
+last_versions.json
+packages.txt
+push_to_github.bat
+启动工具.bat
+更新报告.txt
+requirements.txt

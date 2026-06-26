@@ -68,6 +68,22 @@ def main() -> None:
         if not args.dry_run:
             raise SystemExit(1)
 
+    # Build transcriber chain from CLI flag
+    from config import TranscriberProvider
+    tc = args.transcriber
+    if tc == "groq":
+        transcriber_chain = [TranscriberProvider.GROQ]
+    elif tc == "openai_whisper":
+        transcriber_chain = [TranscriberProvider.OPENAI_WHISPER]
+    elif tc == "local":
+        transcriber_chain = [TranscriberProvider.LOCAL_WHISPER]
+    else:
+        transcriber_chain = [
+            TranscriberProvider.GROQ,
+            TranscriberProvider.OPENAI_WHISPER,
+            TranscriberProvider.LOCAL_WHISPER,
+        ]
+
     cfg = Config(
         url=url,
         local_file=local_file,
@@ -82,6 +98,10 @@ def main() -> None:
         note_language=args.note_language,
         keep_video=args.keep_video,
         keep_frames=args.keep_frames,
+        cookies_from_browser=args.cookies_from_browser,
+        cookies_file=args.cookies_file,
+        transcriber_chain=transcriber_chain,
+        game_analysis=not args.no_game_analysis,
     )
 
     # --- Show metadata ---
@@ -171,6 +191,27 @@ Examples:
     p.add_argument(
         "-l", "--note-language", default="zh",
         help="Language for generated notes – 'zh', 'en', 'ja', etc. (default: zh)",
+    )
+
+    # YouTube auth
+    p.add_argument(
+        "--cookies-from-browser", default=None,
+        help="Extract cookies from browser to bypass login (chrome, firefox, edge, brave, opera)",
+    )
+    p.add_argument(
+        "--cookies-file", default=None,
+        help="Path to cookies.txt (Netscape format) for YouTube login bypass",
+    )
+
+    # Transcription
+    p.add_argument(
+        "--transcriber", default="auto",
+        choices=["auto", "groq", "openai_whisper", "local"],
+        help="Transcription backend chain (default: auto = Groq -> OpenAI -> local)",
+    )
+    p.add_argument(
+        "--no-game-analysis", action="store_true",
+        help="Disable game-specific analysis prompt",
     )
 
     # Misc

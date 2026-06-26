@@ -11,8 +11,9 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 
 from config import (
-    Config, Provider, ProviderInfo,
-    PROVIDER_CONFIG, get_provider_info, PipelineCancelled,
+    Config, Provider, ProviderInfo, TranscriberProvider,
+    PROVIDER_CONFIG, TRANSCRIBER_CONFIG, get_provider_info, UsageTracker,
+    PipelineCancelled,
 )
 from pipeline import run_pipeline
 
@@ -94,6 +95,33 @@ class YouTubeNotesGUI:
         # 初始化模型下拉框
         self._on_provider_changed()
 
+        # 首次启动显示模型推荐
+        self.root.after(500, self._maybe_show_model_guide)
+
+    def _maybe_show_model_guide(self) -> None:
+        """Show model cost recommendation on first launch (once per session)."""
+        import os as _os
+        flag_path = Path(_os.environ.get("LOCALAPPDATA", _os.path.expanduser("~"))) / "video-notes" / ".guide_shown"
+        if flag_path.exists():
+            return
+        # Create flag so it only shows once
+        flag_path.parent.mkdir(parents=True, exist_ok=True)
+        flag_path.write_text("1")
+
+        msg = (
+            "🎮 分析模型推荐（按费用排序）：\n\n"
+            "🥇 Ollama 本地 — 完全免费，需自行部署视觉模型\n"
+            "🥈 DeepSeek — ¥0.001/1K tokens，不支持视觉\n"
+            "🥉 OpenAI gpt-4o-mini — $0.15/1M input tokens\n"
+            "💎 Claude Sonnet 4 / GPT-4o — $3-15/1M tokens\n\n"
+            "语音转录推荐：\n"
+            "🎤 Groq Whisper — 每月 1000 分钟免费，最快\n"
+            "🎤 OpenAI Whisper — $0.006/分钟\n"
+            "🎤 本地 whisper.cpp — 免费离线\n\n"
+            "建议先用 Groq（免费）+ DeepSeek（便宜）组合！"
+        )
+        messagebox.showinfo("模型推荐", msg)
+
     # ------------------------------------------------------------------
     # 菜单栏
     # ------------------------------------------------------------------
@@ -157,6 +185,32 @@ class YouTubeNotesGUI:
             url_file_frame, text="", foreground="gray",
         )
         self.local_file_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        row += 1
+
+        # Cookies 配置（YouTube 登录绕过）
+        cookies_frame = ttk.Frame(main_frame)
+        cookies_frame.grid(row=row, column=0, sticky="ew", pady=(6, 10))
+        cookies_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(cookies_frame, text="Cookies（YouTube登录）：").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.cookies_browser_var = tk.StringVar(value="")
+        cookies_cb = ttk.Combobox(
+            cookies_frame, textvariable=self.cookies_browser_var, state="readonly",
+            values=["", "chrome", "firefox", "edge", "brave", "opera"],
+            width=14,
+        )
+        cookies_cb.grid(row=0, column=1, sticky="w", padx=(0, 8))
+        ttk.Label(
+            cookies_frame, text="浏览器cookies（留空=不使用）",
+            foreground="gray",
+        ).grid(row=0, column=2, sticky="w", padx=(0, 8))
+
+        self.cookies_file_var = tk.StringVar()
+        ttk.Button(
+            cookies_frame, text="导入 cookies.txt...",
+            command=self._browse_cookies_file,
+        ).grid(row=0, column=3, sticky="e")
 
         row += 1
 
@@ -251,6 +305,27 @@ class YouTubeNotesGUI:
         ttk.Checkbutton(
             settings_frame, text="保留截图文件", variable=self.keep_frames_var,
         ).grid(row=2, column=3, sticky="w", pady=(8, 0))
+
+        row += 1
+
+        # ---- 语音转录设置 ----
+        transcribe_frame = ttk.LabelFrame(main_frame, text="语音转录", padding="6 4 6 6")
+        transcribe_frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+        transcribe_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(transcribe_frame, text="转录方案：").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.transcriber_var = tk.StringVar(value="auto")
+        transcriber_cb = ttk.Combobox(
+            transcribe_frame, textvariable=self.transcriber_var, state="readonly",
+            values=["auto", "groq", "openai_whisper", "local"],
+            width=16,
+        )
+        transcriber_cb.grid(row=0, column=1, sticky="w")
+        ttk.Label(
+            transcribe_frame,
+            text="auto = Groq 免费优先（1000分钟/月）→ OpenAI $0.006/分钟 → whisper.cpp 本地离线",
+            foreground="gray",
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
 
         row += 1
 
@@ -420,6 +495,22 @@ class YouTubeNotesGUI:
                 lang_code = code
                 break
 
+        # 构建转录链
+        transcriber_choice = self.transcriber_var.get()
+        if transcriber_choice == "groq":
+            transcriber_chain = [TranscriberProvider.GROQ]
+        elif transcriber_choice == "openai_whisper":
+            transcriber_chain = [TranscriberProvider.OPENAI_WHISPER]
+        elif transcriber_choice == "local":
+            transcriber_chain = [TranscriberProvider.LOCAL_WHISPER]
+        else:
+            # auto: Groq → OpenAI → local
+            transcriber_chain = [
+                TranscriberProvider.GROQ,
+                TranscriberProvider.OPENAI_WHISPER,
+                TranscriberProvider.LOCAL_WHISPER,
+            ]
+
         # 构建配置
         try:
             cfg = Config(
@@ -435,10 +526,28 @@ class YouTubeNotesGUI:
                 note_language=lang_code,
                 keep_video=self.keep_video_var.get(),
                 keep_frames=self.keep_frames_var.get(),
+                cookies_from_browser=self.cookies_browser_var.get() or None,
+                cookies_file=self.cookies_file_var.get() or None,
+                transcriber_chain=transcriber_chain,
             )
         except ValueError as exc:
             messagebox.showerror("配置错误", str(exc))
             return
+
+        # 检查转录额度（Groq 免费额度）
+        tracker = UsageTracker(cfg.output_dir)
+        groq_warning = tracker.exhaustion_message(TranscriberProvider.GROQ)
+        if groq_warning and self.transcriber_var.get() in ("auto", "groq"):
+            if not messagebox.askyesno(
+                "⚠️ 转录额度告警",
+                f"{groq_warning}\n\n"
+                "是否继续使用 Groq？（选「否」将跳过 Groq，直接用下一级转录方案）",
+            ):
+                # Remove Groq from the chain if user declines
+                cfg.transcriber_chain = [
+                    p for p in cfg.transcriber_chain
+                    if p != TranscriberProvider.GROQ
+                ]
 
         # 禁用界面，启动后台线程
         self._running = True
@@ -572,6 +681,20 @@ class YouTubeNotesGUI:
         else:
             self.local_file_var.set("")
             self.local_file_label.config(text="")
+
+    def _browse_cookies_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择 cookies.txt 文件",
+            filetypes=[
+                ("Cookies 文本文件", "*.txt"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if path:
+            self.cookies_file_var.set(path)
+            self.status_var.set(f"已加载 cookies: {Path(path).name}")
+        else:
+            self.cookies_file_var.set("")
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory()

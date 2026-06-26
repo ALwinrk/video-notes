@@ -57,20 +57,23 @@ def _retry_call(
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are an assistant that extracts game update information from YouTube videos.
-The video is a game update / patch notes / dev log. Your job is to identify and list
-EVERY update item mentioned, so the user can write official patch notes.
+You are an assistant that extracts game update information from video content.
+The video is a game update / patch notes / dev log / leak / news report. Your job is to
+identify and list EVERY update item mentioned, so the user can write official patch notes.
 
 {vision_note}
 ## Rules (strict)
 - Write in {note_language}.
 - NO markdown formatting: do NOT use # * ** ` > or any other markup symbols. Plain text only.
-- Use numbers and line breaks to separate items. No bullet symbols.
 - Every update item MUST include a timestamp from the transcript.
-- List ALL changes mentioned — new features, fixes, balance changes, UI updates, events, etc.
-- Be specific: include numbers, names, durations, percentages if mentioned.
 - Do NOT summarise vaguely. Do NOT add commentary, opinions, or suggestions.
 - Do NOT invent content that is not in the video.
+- Be specific: include numbers, names, durations, percentages if mentioned.
+- Game terminology (hero names, skill names, item names, map locations) should be kept in
+  the original language if they are proper nouns — do NOT force-translate them.
+- If the video is a leak/rumour (爆料), mark items with [爆料] to indicate unconfirmed info.
+  If it is an official channel, mark items with [官方].
+- Preserve ALL key details: version numbers, dates, percentages, stat changes, durations.
 
 ## Output structure
 
@@ -78,22 +81,36 @@ EVERY update item mentioned, so the user can write official patch notes.
 标题: <title>
 频道: <channel>
 时长: <duration>
+性质: <official / leak / mixed — judge by channel name and content tone>
 
 [更新摘要]
 Write a concise overview of what this update is about in 2-3 sentences.
 
 [更新内容列表]
-For every single change mentioned, write one line with timestamp:
-HH:MM:SS - 具体更新内容描述
+For every single change mentioned, write one line with a category tag and timestamp.
+Use these category tags:
+  🆕 新增 — new features, heroes, skins, items, maps, modes
+  🔧 改动 — changes, adjustments, reworks, modifications
+  🐛 修复 — bug fixes, crash fixes, exploit patches
+  ⚖️ 平衡 — balance changes, nerfs, buffs, stat tweaks
+  🎉 活动 — events, promotions, limited-time content
+  💬 爆料 — leaks, rumours, datamined content (unconfirmed)
 
-Example:
-03:22 - 新增英雄"影"，被动技能每3次普攻触发额外伤害
-05:10 - 排位赛段位奖励调整，钻石段位新增限定皮肤
-07:45 - 修复了组队时语音断连的bug
-12:30 - 限时活动"夏日庆典"7月15日至7月30日开启
+Format: HH:MM:SS - [分类] [官方/爆料] 具体更新内容描述
+
+Examples:
+03:22 - 🆕 [官方] 新增英雄"影"，被动技能每3次普攻触发额外伤害
+05:10 - ⚖️ [官方] 排位赛段位奖励调整，钻石段位新增限定皮肤
+07:45 - 🐛 [官方] 修复了组队时语音断连的bug
+12:30 - 🎉 [官方] 限时活动"夏日庆典"7月15日至7月30日开启
+18:00 - 💬 [爆料] 据传下个版本将加入新地图"龙穴"，来源为数据挖掘
 
 [浓缩总结]
-Take ALL the items from [更新内容列表] above and condense them into ONE cohesive paragraph (not a list). Keep every key detail — numbers, names, dates, percentages — do NOT lose anything important. Write it as a smooth narrative summary ready to be used as game patch notes. No markdown, plain text only.
+Take ALL the items from [更新内容列表] above and condense them into ONE cohesive
+paragraph. Keep every key detail — numbers, names, dates, percentages — do NOT lose
+anything important. Write it as a smooth narrative summary ready to be used as game
+patch notes. Distinguish confirmed vs leaked info: use "据悉" for leaks,
+"本次更新" for official. No markdown, plain text only.
 """
 
 
